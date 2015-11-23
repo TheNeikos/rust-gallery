@@ -1,5 +1,10 @@
 extern crate hyper;
 extern crate url;
+extern crate getopts;
+
+use getopts::Options;
+use std::env;
+use std::str::FromStr;
 
 use std::path::{Path};
 use std::fs::File;
@@ -23,7 +28,7 @@ fn get_path_from_request(req: &Request) -> Result<String, ()> {
 
 fn send_404(mut res: Response) {
     *res.status_mut() = hyper::status::StatusCode::NotFound;
-    res.send(b"Not found");
+    res.send(b"Not found").unwrap();
 }
 
 fn print_dir(path: &Path, res: Response) {
@@ -67,7 +72,7 @@ fn print_dir(path: &Path, res: Response) {
 
         v.into_iter().map(|x| x.0).collect::<Vec<String>>().join("")
     }, style = include_str!("./style.css"), favicon = include_str!("./rust-logo-32x32.base64"));
-    res.send(resp.as_bytes());
+    res.send(resp.as_bytes()).unwrap();
 }
 
 fn send_file(path: &Path, res: Response) {
@@ -77,7 +82,7 @@ fn send_file(path: &Path, res: Response) {
     let mut buf = [0u8; 1024];
     while let Ok(x) = file.read(&mut buf) {
         if x == 0 { break; }
-        res.write(&buf[0..x]);
+        res.write(&buf[0..x]).unwrap();
     }
 
 }
@@ -95,7 +100,7 @@ fn handle(req: Request, res: Response) {
     if path_str.find("..").is_some() {
         return send_404(res);
     }
-    let mut path = Path::new(&path_str);
+    let path = Path::new(&path_str);
     let exists = path.exists();
     println!("{:?}", path);
     if exists {
@@ -110,6 +115,40 @@ fn handle(req: Request, res: Response) {
     }
 }
 
+fn print_usage(program: &str, opts: Options) {
+    let brief = format!("Usage: {} [options]", program);
+    print!("{}", opts.usage(&brief));
+}
+
 fn main() {
-    Server::http("0.0.0.0:3000").unwrap().handle(handle);
+    let args: Vec<String> = env::args().collect();
+    let program = args[0].clone();
+
+    let mut opts = Options::new();
+    opts.optopt("p", "port", "set port", "PORT");
+    opts.optopt("i", "interface", "set interface address", "INTERFACE ADDRESS");
+    opts.optflag("h", "help", "print this help menu");
+
+    let matches = match opts.parse(&args[1..]) {
+        Ok(m) => m,
+        Err(f) => panic!(f.to_string())
+    };
+
+    if matches.opt_present("h") {
+        print_usage(&program, opts);
+        return;
+    }
+
+    let interface = if let Some(x) = matches.opt_str("i") {
+        x
+    } else {
+        format!("127.0.0.1")
+    };
+    let port = if let Some(p) = matches.opt_str("p") {
+        usize::from_str(&p[..]).unwrap()
+    } else {
+        3000
+    };
+
+    Server::http(&format!("{}:{}", interface, port)[..]).unwrap().handle(handle).unwrap();
 }
