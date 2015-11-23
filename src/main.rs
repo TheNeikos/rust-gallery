@@ -7,7 +7,7 @@ use std::env;
 use std::str::FromStr;
 
 use std::path::{Path};
-use std::fs::File;
+use std::fs::{File, PathExt};
 use std::io::{Read, Write};
 
 use hyper::Server;
