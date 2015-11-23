@@ -7,7 +7,7 @@ use std::env;
 use std::str::FromStr;
 
 use std::path::{Path};
-use std::fs::{File, PathExt};
+use std::fs::{File, PathExt, read_dir, metadata};
 use std::io::{Read, Write};
 
 use hyper::Server;
@@ -47,7 +47,7 @@ fn print_dir(path: &Path, res: Response) {
      </ul>
  </body>
 </html>", title=path.display() ,content={
-        let dir = path.read_dir().unwrap();
+        let dir = read_dir(path).unwrap();
         let mut v = Vec::new();
         for entry in dir {
             let dir = entry.unwrap();
@@ -101,10 +101,10 @@ fn handle(req: Request, res: Response) {
         return send_404(res);
     }
     let path = Path::new(&path_str);
-    let exists = path.exists();
+    let exists = metadata(path).is_ok();
     println!("{:?}", path);
     if exists {
-        let is_dir = path.is_dir();
+        let is_dir = metadata(path).unwrap().is_dir();
         if is_dir {
             print_dir(path, res);
         } else {
