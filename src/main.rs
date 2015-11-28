@@ -1,13 +1,15 @@
 extern crate hyper;
 extern crate url;
 extern crate getopts;
+extern crate glob;
 
 use getopts::Options;
 use std::env;
 use std::str::FromStr;
+use std::result::Result;
 
 use std::path::{Path};
-use std::fs::{File, PathExt, read_dir, metadata};
+use std::fs::{File, read_dir, metadata};
 use std::io::{Read, Write};
 
 use hyper::Server;
@@ -16,6 +18,8 @@ use hyper::server::Response;
 use hyper::uri::RequestUri;
 
 use url::percent_encoding::percent_decode;
+
+use glob::glob;
 
 fn get_path_from_request(req: &Request) -> Result<String, ()> {
     match req.uri {
@@ -47,32 +51,32 @@ fn print_dir(path: &Path, res: Response) {
      </ul>
  </body>
 </html>", title=path.display() ,content={
-        let dir = read_dir(path).unwrap();
-        let mut v = Vec::new();
-        for entry in dir {
-            let dir = entry.unwrap();
-            let name = dir.file_name().into_string().unwrap();
-            v.push((format!("<li class=\"file\" data-type=\"{class}\"><a href=\"{link}{ending}\">{link}</a></li>", link = name,
-               ending = {
-                   if dir.file_type().unwrap().is_dir() { "/" } else { "" }
-               },
-               class = {
-                   let ft = dir.file_type().unwrap();
-                   if ft.is_dir() { format!("directory") } else {
-                       let path = dir.path();
-                       let name = path.extension();
-                       format!("{}", match name {
-                            Some(st) => st.to_str().unwrap(),
-                            None => "unknown"
-                       })
-                   }
-               }), dir.file_type().unwrap().is_dir()));
-        }
-        v.sort();
+let dir = read_dir(path).unwrap();
+let mut v = Vec::new();
+for entry in dir {
+    let dir = entry.unwrap();
+    let name = dir.file_name().into_string().unwrap();
+    v.push((format!("<li class=\"file\" data-type=\"{class}\"><a href=\"{link}{ending}\">{link}</a></li>", link = name,
+                    ending = {
+                        if dir.file_type().unwrap().is_dir() { "/" } else { "" }
+                    },
+                    class = {
+                        let ft = dir.file_type().unwrap();
+                        if ft.is_dir() { format!("directory") } else {
+                            let path = dir.path();
+                            let name = path.extension();
+                            format!("{}", match name {
+                                Some(st) => st.to_str().unwrap(),
+                                None => "unknown"
+                            })
+                        }
+                    }), dir.file_type().unwrap().is_dir()));
+}
+v.sort();
 
-        v.into_iter().map(|x| x.0).collect::<Vec<String>>().join("")
-    }, style = include_str!("./style.css"), favicon = include_str!("./rust-logo-32x32.base64"));
-    res.send(resp.as_bytes()).unwrap();
+v.into_iter().map(|x| x.0).collect::<Vec<String>>().join("")
+}, style = include_str!("./style.css"), favicon = include_str!("./rust-logo-32x32.base64"));
+res.send(resp.as_bytes()).unwrap();
 }
 
 fn send_file(path: &Path, res: Response) {
@@ -115,6 +119,69 @@ fn handle(req: Request, res: Response) {
     }
 }
 
+fn print_dir_gallery(path: &Path, res: Response) {
+    let resp = format!("<!DOCTYPE html>
+<html>
+ <head>
+     <title>Content of {title}</title>
+     <style>{style}</style>
+     <link href=\"data:image/png;base64,{favicon}\"
+     rel=\"icon\" type=\"image/png\">
+ </head>
+ <body onkeydown='keypress(event)'>
+    <img id='image'>
+     <script>
+        window.files = [{script_data}]
+        {script}
+     </script>
+ </body>
+</html>", title=path.display() , style = include_str!("./style.css"), favicon = include_str!("./rust-logo-32x32.base64"),
+script = include_str!("./script.js"), script_data = {
+let dir = glob("./**/*").unwrap().filter_map(Result::ok);
+let mut v = Vec::new();
+for entry in dir {
+    println!("Found: {:?}", entry);
+    let dir = entry;
+    let ft = metadata(dir.clone()).unwrap();
+    let is_dir = ft.is_dir();
+    if is_dir { continue; }
+    if !dir.extension().is_some() { continue; }
+    if !["jpg", "png", "gif"].contains(&dir.extension().unwrap().to_str().unwrap()) { continue; }
+    v.push(format!("{{path:'{path}'}}", path = dir.display() ));
+}
+v.into_iter().collect::<Vec<String>>().join(",")
+});
+res.send(resp.as_bytes()).unwrap();
+}
+
+fn gallery_handle(req: Request, res: Response) {
+    let path_str = {
+        let path = get_path_from_request(&req);
+
+        if let Ok(p) = path {
+            format!(".{}", p)
+        } else {
+            return send_404(res);
+        }
+    };
+    if path_str.find("..").is_some() {
+        return send_404(res);
+    }
+    let path = Path::new(&path_str);
+    let exists = metadata(path).is_ok();
+    println!("{:?}", path);
+    if exists {
+        let is_dir = metadata(path).unwrap().is_dir();
+        if is_dir {
+            print_dir_gallery(path, res);
+        } else {
+            send_file(path, res);
+        }
+    } else {
+        send_404(res);
+    }
+}
+
 fn print_usage(program: &str, opts: Options) {
     let brief = format!("Usage: {} [options]", program);
     print!("{}", opts.usage(&brief));
@@ -127,6 +194,8 @@ fn main() {
     let mut opts = Options::new();
     opts.optopt("p", "port", "set port", "PORT");
     opts.optopt("i", "interface", "set interface address", "INTERFACE ADDRESS");
+    opts.optflag("g", "gallery", "start in gallery modus");
+    opts.optflag("e", "extensions", "file extensions to use in gallery mode");
     opts.optflag("h", "help", "print this help menu");
 
     let matches = match opts.parse(&args[1..]) {
@@ -150,5 +219,10 @@ fn main() {
         3000
     };
 
-    Server::http(&format!("{}:{}", interface, port)[..]).unwrap().handle(handle).unwrap();
+    if matches.opt_present("g") {
+        Server::http(&format!("{}:{}", interface, port)[..]).unwrap().handle(gallery_handle).unwrap();
+    } else {
+        Server::http(&format!("{}:{}", interface, port)[..]).unwrap().handle(handle).unwrap();
+    }
+
 }

@@ -6,6 +6,7 @@ authors = ["Marcel Müller <neikos@neikos.email>"]
 [dependencies]
 hyper = "*"
 getopts = "0.2"
+glob = "*"
 
 [dependencies.url]
 git = "https://github.com/servo/rust-url"
